@@ -1,7 +1,7 @@
 """Calendars with matches (all followed competitions / favorite teams)."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
@@ -25,11 +25,22 @@ async def async_setup_entry(
     async_add_entities([MatchCalendar(coord, favorites_only=False), MatchCalendar(coord, favorites_only=True)])
 
 
+def _as_dt(value: date | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return dt_util.start_of_local_day(value)
+
+
 def to_calendar_event(ev: dict[str, Any]) -> CalendarEvent | None:
     start = dt_util.parse_datetime(ev["start"]) if ev.get("start") else None
     if not start:
         return None
-    end = start + DURATION.get(ev["sport"], timedelta(hours=2))
+    if ev.get("time_known") is False:
+        # kick-off time unknown (SZĽH youth leagues) -> all-day event
+        start = dt_util.as_local(start).date()
+        end = start + timedelta(days=1)
+    else:
+        end = start + DURATION.get(ev["sport"], timedelta(hours=2))
     emoji = SPORT_EMOJI.get(ev["sport"], "")
     summary = f"{emoji} {ev['home']['name']} – {ev['away']['name']}"
     if ev["status"] != STATUS_NOT_STARTED:
@@ -68,7 +79,7 @@ class MatchCalendar(SportEntity, CalendarEntity):
         now = dt_util.utcnow()
         for ev in self._events():
             cal = to_calendar_event(ev)
-            if cal and cal.end > now:
+            if cal and _as_dt(cal.end) > now:
                 return cal
         return None
 
@@ -76,6 +87,6 @@ class MatchCalendar(SportEntity, CalendarEntity):
         out = []
         for ev in self._events():
             cal = to_calendar_event(ev)
-            if cal and cal.end > start_date and cal.start < end_date:
+            if cal and _as_dt(cal.end) > start_date and _as_dt(cal.start) < end_date:
                 out.append(cal)
         return out

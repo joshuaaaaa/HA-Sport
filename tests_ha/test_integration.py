@@ -389,3 +389,92 @@ async def test_szlh_preset_link_prefilled(hass: HomeAssistant, fake_api) -> None
         result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "competitions"})
         marker = next(k for k in result["data_schema"].schema if k == "szlh_link")
         assert marker.description["suggested_value"] == ""
+
+
+async def test_youth_league_end_to_end(hass: HomeAssistant, hass_ws_client, fake_api) -> None:
+    """Liga mladších žiakov AA with HKM Zvolen as favorite: sensors, calendar, reminders."""
+    from datetime import datetime, timedelta
+
+    from custom_components.ha_sport.calendar import to_calendar_event
+    from custom_components.ha_sport.szlh import TZ, team_id
+
+    now = datetime.now(TZ)
+    played = now - timedelta(days=2)
+    tomorrow = now + timedelta(days=1)
+    later = now + timedelta(days=5)
+    pages = {
+        "/sk/stats/standings/1207/liga-mladsich-ziakov-aa": """
+            <title>Súťaže a štatistiky | Liga mladších žiakov AA | Tabuľky | HockeySlovakia.sk</title>
+            <h2>Základná časť</h2>
+            <table><thead><tr><th>#</th><th>Tím</th><th>Z</th><th>V</th><th>P</th><th>Skóre</th><th>B</th></tr></thead>
+            <tr><td>1.</td><td><a href="/sk/stats/teams/1207/x/team/1/y">HC Košice</a></td><td>3</td><td>3</td><td>0</td><td>33:7</td><td>18</td></tr>
+            <tr><td>2.</td><td><a href="/sk/stats/teams/1207/x/team/2/y">HKM Zvolen</a></td><td>3</td><td>2</td><td>1</td><td>43:16</td><td>16</td></tr>
+            </table>
+            <h2>Najlepší strelci</h2>
+            <table><tr><th>Hráč</th><th>G</th></tr><tr><td>NOVÁK, Peter</td><td>9</td></tr><tr><td>KOVÁČ, Ján</td><td>7</td></tr></table>""",
+        "/sk/stats/results/1207/liga-mladsich-ziakov-aa": f"""
+            <title>Súťaže a štatistiky | Liga mladších žiakov AA | Program a výsledky | HockeySlovakia.sk</title>
+            <table>
+            <tr><td>{played:%d.%m.}</td></tr>
+            <tr><td>10:00</td><td><a href="/sk/stats/teams/1207/x/team/2/y">HKM Zvolen</a></td><td>7:2</td>
+                <td><a href="/sk/stats/teams/1207/x/team/1/y">HC Košice</a></td></tr>
+            <tr><td>{tomorrow:%d.%m.}</td></tr>
+            <tr><td><a href="/sk/stats/teams/1207/x/team/3/y">HK Poprad</a></td><td></td>
+                <td><a href="/sk/stats/teams/1207/x/team/2/y">HKM Zvolen</a></td></tr>
+            <tr><td>{later:%d.%m.}</td></tr>
+            <tr><td>15:30</td><td><a href="/sk/stats/teams/1207/x/team/2/y">HKM Zvolen</a></td><td></td>
+                <td><a href="/sk/stats/teams/1207/x/team/4/y">SLOVAN Bratislava - mládež</a></td></tr>
+            </table>""",
+    }
+
+    async def fake_get(self, path):
+        return pages.get(path)
+
+    zvolen = team_id("HKM Zvolen")
+    with patch("custom_components.ha_sport.szlh.SzlhClient._get", new=fake_get):
+        entry = MockConfigEntry(domain=DOMAIN, title="HA Sport", data={
+            **ENTRY_DATA,
+            "competitions": [{"id": "szlh-1207", "szlh_id": 1207, "slug": "liga-mladsich-ziakov-aa",
+                              "name": "Liga mladších žiakov AA", "sport": "ice-hockey", "country": "SK", "source": "szlh"}],
+            "favorite_teams": [{"id": zvolen, "name": "HKM Zvolen", "sport": "ice-hockey"}],
+            "notify_before": ["1440", "60"],
+        })
+        entry.add_to_hass(hass)
+        events = async_capture_events(hass, EVENT_NOTIFICATION)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        coord = entry.runtime_data.coordinator
+
+        # only the real standings table, no player stats
+        assert [t["name"] for t in coord.standings["szlh-1207"]] == ["Základná časť"]
+        summary = coord.team_summary(zvolen)
+        assert summary["position"]["position"] == 2 and summary["position"]["points_per_game"] == 5.33
+        assert summary["form"] == ["W"]
+        nxt = summary["next"]
+        assert nxt["home"]["name"] == "HK Poprad" and nxt["time_known"] is False
+        assert [e["away"]["name"] for e in summary["this_week"]] == ["HKM Zvolen", "SLOVAN Bratislava - mládež"]
+
+        # unknown time -> all-day calendar entry, no 60-min reminder (only the day-before one)
+        cal = to_calendar_event(nxt)
+        assert not hasattr(cal.start, "hour")
+        pre = [e.data for e in events if e.data["kind"] == "pre_match"]
+        assert all(p["minutes"] == 1440 for p in pre)
+        timers = entry.runtime_data.notifier._timers
+        assert not any(k.startswith(f"{nxt['id']}:pre:60") for k in timers)
+        later_ev = summary["this_week"][1]
+        assert any(k == f"{later_ev['id']}:pre:60" for k in timers)
+
+        # sensors and calendar entity work, no Sofascore-only lookups for SZĽH ids
+        states = hass.states.async_all()
+        assert any(s.attributes.get("team_id") == zvolen and s.attributes.get("opponent") == "HK Poprad" for s in states)
+        pos = next(s for s in states if s.attributes.get("points") == 16)
+        assert pos.state == "2"
+        assert not any(eid < 0 for eid in coord._odds_fetched)
+
+        client = await hass_ws_client(hass)
+        await client.send_json({"id": 1, "type": "ha_sport/overview"})
+        msg = await client.receive_json()
+        assert msg["result"]["competitions"][0]["id"] == "szlh-1207"
+        await client.send_json({"id": 2, "type": "ha_sport/team", "team_id": zvolen})
+        msg = await client.receive_json()
+        assert msg["success"] and msg["result"]["next"]["competition"] == "Liga mladších žiakov AA"

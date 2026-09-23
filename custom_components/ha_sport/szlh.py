@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import zlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -37,9 +37,40 @@ TEAM_LINK_RE = re.compile(r"/team/(\d+)")
 URL_RE = re.compile(r"/stats/[\w-]+/(\d+)(?:/([\w\-.%]+))?")
 LINK_RE = re.compile(r"/(?:sk|en)/stats/[\w-]+/(\d+)(?:/([\w\-.%]+))?")
 DATE_RE = re.compile(r"(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})")
+# "So 27.09." / "27. 9." – date without a year (common on the site's match lists)
+SHORT_DATE_RE = re.compile(r"(?:^|[\s(])(\d{1,2})\.\s*(\d{1,2})\.(?!\s*\d{4})(?!\d)")
 TIME_RE = re.compile(r"^(\d{1,2})[:.](\d{2})$")
 SCORE_RE = re.compile(r"(\d{1,2})\s*:\s*(\d{1,2})(?:\s*\(|\s*(pp|sn|PP|SN|p\.p\.|s\.n\.|pr\.|n\.)|\s*$)")
 PAIR_RE = re.compile(r"^\s*(\d+)\s*:\s*(\d+)\s*$")
+
+
+def find_date(text: str, today: datetime | None = None) -> tuple[int, int, int] | None:
+    """(year, month, day) from '27. 9. 2026' or '27.09.' (year guessed around today)."""
+    m = DATE_RE.search(text)
+    if m:
+        return int(m.group(3)), int(m.group(2)), int(m.group(1))
+    m = SHORT_DATE_RE.search(text)
+    if not m:
+        return None
+    day, month = int(m.group(1)), int(m.group(2))
+    if not (1 <= day <= 31 and 1 <= month <= 12):
+        return None
+    today = today or datetime.now(TZ)
+    # pick the year that puts the date closest to today (season crosses new year)
+    best = None
+    for year in (today.year - 1, today.year, today.year + 1):
+        try:
+            cand = datetime(year, month, day, tzinfo=TZ)
+        except ValueError:
+            continue
+        diff = abs((cand - today).total_seconds())
+        if best is None or diff < best[0]:
+            best = (diff, year)
+    return (best[1], month, day) if best else None
+
+
+def _strip_dates(text: str) -> str:
+    return SHORT_DATE_RE.sub(" ", DATE_RE.sub(" ", text))
 
 
 def team_id(name: str) -> int:
@@ -278,6 +309,10 @@ def parse_standings(html: str, logo: str | None = None) -> list[dict[str, Any]]:
                     "promotion_id": None,
                 }
             )
+        # a standings table has a team column or scores ("33:7"); player stats tables have neither
+        with_score = sum(1 for r in out_rows if r["scores_for"] is not None)
+        if "team" not in mapping and with_score < max(2, len(out_rows) // 2):
+            continue
         if len(out_rows) >= 2:
             tables.append({"name": table["heading"] or "Tabuľka", "rows": out_rows})
     return tables
@@ -290,21 +325,24 @@ def _is_team_text(text: str) -> bool:
         return False
     if DATE_RE.search(t) or TIME_RE.match(t):
         return False
+    if SHORT_DATE_RE.search(" " + t) and not re.search(r"[^\W\d_]{3,}", _strip_dates(" " + t)):
+        return False  # "So 27.09." – a date cell, not a team
     low = normalize(t)
     return low not in {"detail", "zapis", "zapas", "online", "video", "live", "info", "stat", "report", "prenos"}
 
 
-def parse_matches(html: str, comp: dict[str, Any]) -> list[dict[str, Any]]:
+def parse_matches(html: str, comp: dict[str, Any], now: datetime | None = None) -> list[dict[str, Any]]:
     """Matches from a program / results page, normalized like models.normalize_event."""
+    now = now or datetime.now(TZ)
     events: dict[int, dict[str, Any]] = {}
     for table in parse_page(html).tables:
         current_date: tuple[int, int, int] | None = None
         for row in table["rows"]:
             texts = [c.text for c in row]
             joined = " ".join(texts)
-            dm = DATE_RE.search(joined)
-            if dm:
-                current_date = (int(dm.group(3)), int(dm.group(2)), int(dm.group(1)))
+            found = find_date(" " + joined, now)
+            if found:
+                current_date = found
             linked = [c.text for c in row if any(TEAM_LINK_RE.search(h) for h in c.links) and _is_team_text(c.text)]
             team_cells = linked if len(linked) >= 2 else [t for t in texts if _is_team_text(t)]
             home = away = None
@@ -318,16 +356,19 @@ def parse_matches(html: str, comp: dict[str, Any]) -> list[dict[str, Any]]:
             score = None
             for t in texts:
                 t = t.strip()
-                if DATE_RE.search(t):
-                    # "12. 10. 2026 16:45" – time in the same cell as the date
-                    t = DATE_RE.sub("", t).strip(" ,-")
+                if DATE_RE.search(t) or SHORT_DATE_RE.search(" " + t):
+                    # "12. 10. 2026 16:45" / "So 27.09. 16:45" – time in the same cell as the date
+                    t = _strip_dates(" " + t).strip(" ,-")
                     t = re.sub(r"^[^\d]*", "", t)
+                if _is_team_text(t):
+                    continue
                 tm = TIME_RE.match(t)
-                if tm and int(tm.group(1)) <= 23 and hour is None:
+                if tm and int(tm.group(1)) <= 23 and hour is None and score is None:
                     hour, minute = int(tm.group(1)), int(tm.group(2))
                     continue
                 sm = SCORE_RE.search(t)
-                if sm and score is None and not TIME_RE.match(t):
+                # once the kick-off time is known, "12:10" is a score, not a time
+                if sm and score is None and (hour is not None or not TIME_RE.match(t)):
                     score = (int(sm.group(1)), int(sm.group(2)), (sm.group(3) or "").lower())
             y, mo, d = current_date
             try:
@@ -340,6 +381,8 @@ def parse_matches(html: str, comp: dict[str, Any]) -> list[dict[str, Any]]:
             status = STATUS_FINISHED if score else STATUS_NOT_STARTED
             suffix = score[2] if score else ""
             status_text = "Konec" if score else "Nezačalo"
+            if not score and start < now - timedelta(hours=3 if hour is not None else 24):
+                status_text = "Výsledek zatím nezapsán"
             if suffix.startswith("pp") or suffix.startswith("p.p"):
                 status_text = "Po prodloužení"
             elif suffix.startswith("sn") or suffix.startswith("s.n"):
@@ -386,7 +429,7 @@ def parse_matches(html: str, comp: dict[str, Any]) -> list[dict[str, Any]]:
 class SzlhClient:
     """Fetches HockeySlovakia.sk pages (browser-like, curl_cffi when available)."""
 
-    def __init__(self, session: "aiohttp.ClientSession") -> None:
+    def __init__(self, session: Any) -> None:  # aiohttp.ClientSession
         self._session = session
         self.last_error: str | None = None
 

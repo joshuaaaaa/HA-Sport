@@ -37,7 +37,7 @@ def ws_overview(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
     for rt in _runtimes(hass):
         coord = rt.coordinator
         data = coord.data or {}
-        for comp_id, comp in data.get("competitions", {}).items():
+        for comp in data.get("competitions", {}).values():
             competitions.append(
                 {k: comp.get(k) for k in ("id", "name", "sport", "country", "season", "has_bracket", "has_standings", "logo")}
             )

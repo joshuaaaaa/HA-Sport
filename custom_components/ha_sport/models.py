@@ -10,7 +10,6 @@ from typing import Any, Iterable
 
 from .const import (
     IMAGE_BASE_URL,
-    SPORT_BASKETBALL,
     SPORT_FOOTBALL,
     SPORT_HOCKEY,
     STATUS_CANCELED,

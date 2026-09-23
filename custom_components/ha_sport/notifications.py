@@ -38,7 +38,6 @@ from .const import (
     EVENT_ODDS_CHANGE,
     NOTIFY_SCOPE_ALL,
     NOTIFY_SCOPE_FAVORITES,
-    NOTIFY_SCOPE_FOLLOWED,
     STATUS_LIVE,
     STATUS_NOT_STARTED,
 )
@@ -206,6 +205,8 @@ class SportNotifier:
             if not self.in_scope(ev):
                 continue
             for minutes in offsets:
+                if ev.get("time_known") is False and minutes < 1440:
+                    continue  # kick-off time unknown (SZĽH): only day-before reminders make sense
                 fire_at = ev["timestamp"] - minutes * 60
                 key = f"{ev['id']}:pre:{minutes}"
                 if key in self.coordinator.sent_keys or ev["timestamp"] <= now:

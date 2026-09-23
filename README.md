@@ -97,6 +97,13 @@ v kartě, oblíbený tým má senzory příštího zápasu, posledního výsledk
 před zápasem. HockeySlovakia.sk nemá veřejné API, data se čtou z jejich webových stránek (obnova v běžném intervalu,
 výsledek zápasu se objeví po jeho zapsání svazem). U těchto soutěží nejsou kurzy, streamy, živé skóre ani loga týmů.
 
+Specifika dětských soutěží, se kterými integrace počítá:
+* **Datum bez roku** („So 27.09.“) – rok se doplní podle sezóny (i přes přelom roku).
+* **Zápas bez uvedeného času** – v kartě se místo času zobrazí „—“, v kalendáři je celodenní událost
+  a z připomenutí se pošle jen to „den předem“ (kratší by podle neznámého času nedávala smysl).
+* **Odehraný zápas bez zapsaného výsledku** – stav „Výsledek zatím nezapsán“ (bez odpočtu).
+* **Tabulky střelců / hráčů** na stránce tabulky se ignorují, načte se jen tabulka týmů.
+
 Karty pro soutěž SZĽH (stačí název nebo jeho část):
 ```yaml
 type: custom:ha-sport-standings-card
@@ -118,7 +125,7 @@ Kartu přidáte ručně:
 1. Stáhněte [`card/ha-sport-card.js`](card/ha-sport-card.js) a uložte ho do `/config/www/ha-sport-card.js`
    (složku `www` případně vytvořte; po jejím prvním vytvoření restartujte HA).
 2. *Nastavení → Nástěnky → ⋮ → Zdroje → Přidat zdroj*
-   * URL: `/local/ha-sport-card.js?v=1.3.0`
+   * URL: `/local/ha-sport-card.js?v=1.3.1`
    * Typ: **JavaScript modul**
 3. Obnovte prohlížeč (Ctrl+F5, v mobilní aplikaci *Nastavení → Aplikace → Obnovit frontend*).
 

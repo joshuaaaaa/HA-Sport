@@ -12,7 +12,7 @@
  * so it always has the full data (brackets, tables, odds, streams) without
  * bloating entity attributes.
  */
-const CARD_VERSION = "1.3.0";
+const CARD_VERSION = "1.3.1";
 const WS = "ha_sport";
 
 const I18N = {
@@ -368,6 +368,11 @@ class HaSportCard extends HTMLElement {
     return d.toLocaleTimeString(this._hass?.locale?.language || "cs", { hour: "2-digit", minute: "2-digit" });
   }
 
+  _evTime(ev, d) {
+    // SZĽH youth leagues sometimes publish only the day, not the time
+    return ev && ev.time_known === false ? "—" : this._time(d);
+  }
+
   _countdown(ts) {
     const t = this.t;
     let s = Math.max(0, ts - Date.now() / 1000);
@@ -545,9 +550,9 @@ class HaSportCard extends HTMLElement {
     const done = ev.status === "finished";
     let time;
     if (live) time = `<div class="time live">${esc(ev.minute || ev.status_text || t.live)}</div>`;
-    else if (done) time = `<div class="time">${d ? this._time(d) : ""}<br><small>${esc(ev.status_text || "")}</small></div>`;
+    else if (done) time = `<div class="time">${d ? this._evTime(ev, d) : ""}<br><small>${esc(ev.status_text || "")}</small></div>`;
     else if (ev.status !== "notstarted") time = `<div class="time">${esc(ev.status_text)}</div>`;
-    else time = `<div class="time">${d ? this._time(d) : ""}</div>`;
+    else time = `<div class="time">${d ? this._evTime(ev, d) : ""}</div>`;
     const favH = this._isFav(ev.home.id), favA = this._isFav(ev.away.id);
     const team = (tm, side) => {
       const win = done && ((ev.winner === 1 && side === "h") || (ev.winner === 2 && side === "a"));
@@ -569,7 +574,7 @@ class HaSportCard extends HTMLElement {
       ? `<div class="detail">
           <div>${SPORT_EMOJI[ev.sport] || ""} ${esc(ev.competition || "")}${ev.round ? " · " + esc(ev.round) : ""}</div>
           ${ev.venue || ev.city ? `<div>📍 ${esc([ev.venue, ev.city].filter(Boolean).join(", "))}</div>` : ""}
-          ${d ? `<div>🗓 ${esc(this._dayLabel(d))} ${this._time(d)}${ev.status === "notstarted" ? ` · <span data-cd="${ev.timestamp}">${this._countdown(ev.timestamp)}</span>` : ""}</div>` : ""}
+          ${d ? `<div>🗓 ${esc(this._dayLabel(d))} ${this._evTime(ev, d)}${ev.status === "notstarted" && ev.timestamp > Date.now() / 1000 ? ` · <span data-cd="${ev.timestamp}">${this._countdown(ev.timestamp)}</span>` : ev.status === "notstarted" ? ` · ${esc(ev.status_text || "")}` : ""}</div>` : ""}
           ${ev.home.periods?.length ? `<div>${esc(t.score)}: ${ev.home.periods.map((p, i) => `${p}:${ev.away.periods[i] ?? "-"}`).join(", ")}</div>` : ""}
           ${!done ? this._oddsBlock(ev, favH ? ev.home.id : favA ? ev.away.id : null) : ""}
           ${this._streamLinks(ev)}
@@ -703,7 +708,7 @@ class HaSportCard extends HTMLElement {
     const d = this._date(ev.start);
     const center = live || done
       ? `<div class="big ${live ? "live" : ""}">${ev.home.score ?? 0}:${ev.away.score ?? 0}</div><div class="cd">${esc(live ? ev.minute || ev.status_text : ev.status_text)}</div>`
-      : `<div class="when">${d ? esc(this._dayLabel(d)) : ""}</div><div class="big" style="font-size:1.5em">${d ? this._time(d) : ""}</div>
+      : `<div class="when">${d ? esc(this._dayLabel(d)) : ""}</div><div class="big" style="font-size:1.5em">${d ? this._evTime(ev, d) : ""}</div>
          <div class="cd" data-cd="${ev.timestamp}">${this._countdown(ev.timestamp)}</div>`;
     const side = (tm, me) => `<div class="side ${me ? "me" : ""}">${this._img(tm.logo)}<div class="n">${esc(tm.name)}</div></div>`;
     const others = (s.this_week || []).filter((e) => e.id !== ev.id);

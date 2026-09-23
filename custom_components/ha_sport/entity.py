@@ -77,5 +77,8 @@ class TeamEntity(CoordinatorEntity[SportCoordinator]):
             model=SPORTS.get(team.get("sport") or "", "Tým"),
             entry_type=DeviceEntryType.SERVICE,
             via_device=(DOMAIN, entry.entry_id),
-            configuration_url=f"https://www.sofascore.com/team/x/{self.team_id}",
+            configuration_url=(
+                f"https://www.sofascore.com/team/x/{self.team_id}" if self.team_id > 0
+                else "https://www.hockeyslovakia.sk/sk/stats/tournaments"
+            ),
         )

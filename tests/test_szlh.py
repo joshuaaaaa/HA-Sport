@@ -115,3 +115,46 @@ def test_matches_prefer_team_links():
     ev = parse_matches(html, {"id": "szlh-1207", "name": "Liga mladších žiakov AA"})[0]
     assert ev["home"]["name"] == "MHK Ružomberok" and ev["away"]["name"] == "SLOVAN Bratislava - mládež"
     assert (ev["home"]["score"], ev["away"]["score"]) == (3, 4)
+
+
+def test_short_dates_scores_and_overdue():
+    from datetime import datetime
+
+    from custom_components.ha_sport.szlh import TZ, find_date
+
+    now = datetime(2026, 12, 20, 12, 0, tzinfo=TZ)
+    assert find_date(" So 27.09.", now) == (2026, 9, 27)
+    assert find_date(" Ne 3. 1.", now) == (2027, 1, 3)  # season crosses new year
+    assert find_date("27. 9. 2025", now) == (2025, 9, 27)
+    html = """
+    <table>
+     <tr><td>So 13.12.</td></tr>
+     <tr><td>09:00</td><td>HKM Zvolen</td><td>12:10</td><td>HC Košice</td></tr>
+     <tr><td>Ne 14.12.</td></tr>
+     <tr><td>HKM Zvolen</td><td></td><td>HK Poprad</td></tr>
+     <tr><td>Po 22.12. 17:30</td><td>HK Poprad</td><td></td><td>HKM Zvolen</td></tr>
+    </table>"""
+    events = parse_matches(html, {"id": "szlh-1207", "name": "Liga mladších žiakov AA"}, now)
+    assert len(events) == 3
+    first, overdue, future = events
+    assert first["start"].startswith("2026-12-13T09:00")
+    assert (first["home"]["score"], first["away"]["score"]) == (12, 10)
+    assert overdue["time_known"] is False and overdue["status_text"] == "Výsledek zatím nezapsán"
+    assert future["time_known"] is True and future["start"].startswith("2026-12-22T17:30")
+    assert future["status_text"] == "Nezačalo"
+
+
+def test_standings_skip_player_tables():
+    html = """
+    <h3>Tabuľka</h3>
+    <table><tr><th>#</th><th>Tím</th><th>Z</th><th>Skóre</th><th>B</th></tr>
+      <tr><td>1.</td><td>HKM Zvolen</td><td>3</td><td>43:16</td><td>16</td></tr>
+      <tr><td>2.</td><td>HC Košice</td><td>3</td><td>33:7</td><td>15</td></tr></table>
+    <h3>Najlepší strelci</h3>
+    <table><tr><th>#</th><th>Hráč</th><th>G</th><th>A</th><th>B</th></tr>
+      <tr><td>1.</td><td>NOVÁK, Peter</td><td>9</td><td>4</td><td>13</td></tr>
+      <tr><td>2.</td><td>KOVÁČ, Ján</td><td>7</td><td>5</td><td>12</td></tr></table>
+    """
+    tables = parse_standings(html)
+    assert [t["name"] for t in tables] == ["Tabuľka"]
+    assert [r["team"] for r in tables[0]["rows"]] == ["HKM Zvolen", "HC Košice"]
