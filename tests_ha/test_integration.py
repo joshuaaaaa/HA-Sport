@@ -366,6 +366,7 @@ async def test_szlh_competition_by_link(hass: HomeAssistant, fake_api) -> None:
         assert szlh["id"] == "szlh-1207" and szlh["name"] == "Liga mladších žiakov AA"
         assert szlh["slug"] == "liga-mladsich-ziakov-aa"
         assert any(c["id"] == UT for c in comps) and current
+        await hass.async_block_till_done()  # let the options reload finish
 
 
 async def test_szlh_preset_link_prefilled(hass: HomeAssistant, fake_api) -> None:
